@@ -75,23 +75,23 @@ class easyXYPlot():
                 value_label = f"MMB: {value}"
 
         if value_type in ["Pos Condition"]:
-            value_label = f"pos cond {index + 1}" if index>0 else f"pos cond"
+            value_label = value
         if value_type in ["Neg Condition"]:
-            value_label = f"neg cond {index + 1}" if index>0 else f"neg cond"
+            value_label = value
 
         if value_type in ["Positive Prompt S/R"]:
-            value_label = f"pos prompt {index + 1}" if index>0 else f"pos prompt"
+            value_label = value
         if value_type in ["Negative Prompt S/R"]:
-            value_label = f"neg prompt {index + 1}" if index>0 else f"neg prompt"
+            value_label = value
 
         if value_type in ["steps", "cfg", "denoise", "clip_skip",
                           "lora_model_strength", "lora_clip_strength"]:
             value_label = f"{value_type}: {value}"
 
         if value_type == "positive":
-            value_label = f"pos prompt {index + 1}"
+            value_label = value
         elif value_type == "negative":
-            value_label = f"neg prompt {index + 1}"
+            value_label = value
 
         return plot_image_vars, value_label
 
