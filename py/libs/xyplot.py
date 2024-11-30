@@ -80,9 +80,11 @@ class easyXYPlot():
             value_label = value
 
         if value_type in ["Positive Prompt S/R"]:
-            value_label = value
+            #value_label = value
+            value_label = f"pos prompt {index + 1}" if index>0 else f"pos prompt"
         if value_type in ["Negative Prompt S/R"]:
-            value_label = value
+            #value_label = value
+            value_label = f"neg prompt {index + 1}" if index>0 else f"neg prompt"
 
         if value_type in ["steps", "cfg", "denoise", "clip_skip",
                           "lora_model_strength", "lora_clip_strength"]:

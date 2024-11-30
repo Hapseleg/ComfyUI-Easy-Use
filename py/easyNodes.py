@@ -7748,6 +7748,8 @@ class pipeXYPlotAdvanced:
 
             del pipe
 
+        print(x_values)
+        print(y_values)
         return pipeXYPlot().plot(grid_spacing, output_individuals, flip_xy, x_axis, x_values, y_axis, y_values, new_pipe, font_path)
 
 #---------------------------------------------------------------节点束 结束----------------------------------------------------------------------
