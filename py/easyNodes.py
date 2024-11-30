@@ -14,9 +14,9 @@ from PIL import Image
 
 from server import PromptServer
 from nodes import MAX_RESOLUTION, LatentFromBatch, RepeatLatentBatch, NODE_CLASS_MAPPINGS as ALL_NODE_CLASS_MAPPINGS, ConditioningSetMask, ConditioningConcat, CLIPTextEncode, VAEEncodeForInpaint, InpaintModelConditioning, ConditioningZeroOut
-from .config import MAX_SEED_NUM, BASE_RESOLUTIONS, RESOURCES_DIR, INPAINT_DIR, FOOOCUS_STYLES_DIR, FOOOCUS_INPAINT_HEAD, FOOOCUS_INPAINT_PATCH, BRUSHNET_MODELS, POWERPAINT_MODELS, IPADAPTER_DIR, IPADAPTER_CLIPVISION_MODELS, IPADAPTER_MODELS, DYNAMICRAFTER_DIR, DYNAMICRAFTER_MODELS, IC_LIGHT_MODELS
 from .layer_diffuse import LayerDiffuse, LayerMethod
 from .xyplot import *
+from .config import *
 
 from .libs.log import log_node_info, log_node_error, log_node_warn
 from .libs.adv_encode import advanced_encode
@@ -898,8 +898,8 @@ class fullLoader:
             "batch_size": (
             "INT", {"default": 1, "min": 1, "max": 4096, "tooltip": "The number of latent images in the batch."})
         },
-            "optional": {"model_override": ("MODEL",), "clip_override": ("CLIP",), "vae_override": ("VAE",), "optional_lora_stack": ("LORA_STACK",), "optional_controlnet_stack": ("CONTROL_NET_STACK",), "a1111_prompt_style": ("BOOLEAN", {"default": a1111_prompt_style_default}), "video_length": ("INT",{"default":25})},
-            "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
+            "optional": {"model_override": ("MODEL",), "clip_override": ("CLIP",), "vae_override": ("VAE",), "optional_lora_stack": ("LORA_STACK",), "optional_controlnet_stack": ("CONTROL_NET_STACK",), "a1111_prompt_style": ("BOOLEAN", {"default": a1111_prompt_style_default})},
+            "hidden": {"video_length": "INT", "prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
         }
 
     RETURN_TYPES = ("PIPE_LINE", "MODEL", "VAE", "CLIP", "CONDITIONING", "CONDITIONING", "LATENT")
@@ -1687,7 +1687,7 @@ class dynamiCrafterLoader(DynamiCrafter):
 
     def get_clip_file(self, node_name):
         clip_list = folder_paths.get_filename_list("clip")
-        pattern = 'sd2-1-open-clip|model\.(safetensors|bin)$'
+        pattern = 'sd2-1-open-clip|model.(safetensors|bin)$'
         clip_files = [e for e in clip_list if re.search(pattern, e, re.IGNORECASE)]
 
         clip_name = clip_files[0] if len(clip_files)>0 else None
@@ -1699,7 +1699,7 @@ class dynamiCrafterLoader(DynamiCrafter):
 
     def get_clipvision_file(self, node_name):
         clipvision_list = folder_paths.get_filename_list("clip_vision")
-        pattern = '(ViT.H.14.*s32B.b79K|ipadapter.*sd15|sd1.?5.*model|open_clip_pytorch_model\.(bin|safetensors))'
+        pattern = '(ViT.H.14.*s32B.b79K|ipadapter.*sd15|sd1.?5.*model|open_clip_pytorch_model.(bin|safetensors))'
         clipvision_files = [e for e in clipvision_list if re.search(pattern, e, re.IGNORECASE)]
 
         clipvision_name = clipvision_files[0] if len(clipvision_files)>0 else None
@@ -1711,7 +1711,7 @@ class dynamiCrafterLoader(DynamiCrafter):
 
     def get_vae_file(self, node_name):
         vae_list = folder_paths.get_filename_list("vae")
-        pattern = 'vae-ft-mse-840000-ema-pruned\.(pt|bin|safetensors)$'
+        pattern = 'vae-ft-mse-840000-ema-pruned.(pt|bin|safetensors)$'
         vae_files = [e for e in vae_list if re.search(pattern, e, re.IGNORECASE)]
 
         vae_name = vae_files[0] if len(vae_files)>0 else None
@@ -2110,9 +2110,7 @@ class pixArtLoader:
 class mochiLoader(fullLoader):
     @classmethod
     def INPUT_TYPES(cls):
-        clip = folder_paths.get_filename_list("text_encoders")
         checkpoints = folder_paths.get_filename_list("checkpoints")
-        loras = ["None"] + folder_paths.get_filename_list("loras")
         return {
             "required": {
                 "ckpt_name": (checkpoints,),
@@ -2636,6 +2634,7 @@ class applyPowerPaint:
         del pipe
         return (new_pipe,)
 
+from node_helpers import conditioning_set_values
 class applyInpaint:
     @classmethod
     def INPUT_TYPES(s):
@@ -2654,6 +2653,9 @@ class applyInpaint:
                 "start_at": ("INT", {"default": 0, "min": 0, "max": 10000}),
                 "end_at": ("INT", {"default": 10000, "min": 0, "max": 10000}),
             },
+            "optional":{
+                "noise_mask": ("BOOLEAN", {"default": True})
+            }
         }
 
     RETURN_TYPES = ("PIPE_LINE",)
@@ -2661,14 +2663,48 @@ class applyInpaint:
     CATEGORY = "EasyUse/Inpaint"
     FUNCTION = "apply"
 
-    def inpaint_model_conditioning(self, pipe, image, vae, mask, grow_mask_by):
+    def inpaint_model_conditioning(self, pipe, image, vae, mask, grow_mask_by, noise_mask=True):
         if grow_mask_by >0:
             mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
-        positive, negative, latent = InpaintModelConditioning().encode(pipe['positive'], pipe['negative'], image,
-                                                                       vae, mask)
-        pipe['positive'] = positive
-        pipe['negative'] = negative
-        pipe['samples'] = latent
+        positive, negative, = pipe['positive'], pipe['negative']
+
+        pixels = image
+        x = (pixels.shape[1] // 8) * 8
+        y = (pixels.shape[2] // 8) * 8
+        mask = torch.nn.functional.interpolate(mask.reshape((-1, 1, mask.shape[-2], mask.shape[-1])),
+                                               size=(pixels.shape[1], pixels.shape[2]), mode="bilinear")
+
+        orig_pixels = pixels
+        pixels = orig_pixels.clone()
+        if pixels.shape[1] != x or pixels.shape[2] != y:
+            x_offset = (pixels.shape[1] % 8) // 2
+            y_offset = (pixels.shape[2] % 8) // 2
+            pixels = pixels[:, x_offset:x + x_offset, y_offset:y + y_offset, :]
+            mask = mask[:, :, x_offset:x + x_offset, y_offset:y + y_offset]
+
+        m = (1.0 - mask.round()).squeeze(1)
+        for i in range(3):
+            pixels[:, :, :, i] -= 0.5
+            pixels[:, :, :, i] *= m
+            pixels[:, :, :, i] += 0.5
+        concat_latent = vae.encode(pixels)
+        orig_latent = vae.encode(orig_pixels)
+
+        out_latent = {}
+
+        out_latent["samples"] = orig_latent
+        if noise_mask:
+            out_latent["noise_mask"] = mask
+
+        out = []
+        for conditioning in [positive, negative]:
+            c = conditioning_set_values(conditioning, {"concat_latent_image": concat_latent,
+                                                                    "concat_mask": mask})
+            out.append(c)
+
+        pipe['positive'] = out[0]
+        pipe['negative'] = out[1]
+        pipe['samples'] = out_latent
 
         return pipe
 
@@ -2677,15 +2713,15 @@ class applyInpaint:
         if type == 'brushnet_random':
             brush_model = BRUSHNET_MODELS['random_mask'][model_type]['model_url']
             if model_type == 'sdxl':
-                pattern = 'brushnet.random.mask.sdxl.*\.(safetensors|bin)$'
+                pattern = 'brushnet.random.mask.sdxl.*.(safetensors|bin)$'
             else:
-                pattern = 'brushnet.random.mask.*\.(safetensors|bin)$'
+                pattern = 'brushnet.random.mask.*.(safetensors|bin)$'
         elif type == 'brushnet_segmentation':
             brush_model = BRUSHNET_MODELS['segmentation_mask'][model_type]['model_url']
             if model_type == 'sdxl':
-                pattern = 'brushnet.segmentation.mask.sdxl.*\.(safetensors|bin)$'
+                pattern = 'brushnet.segmentation.mask.sdxl.*.(safetensors|bin)$'
             else:
-                pattern = 'brushnet.segmentation.mask.*\.(safetensors|bin)$'
+                pattern = 'brushnet.segmentation.mask.*.(safetensors|bin)$'
 
 
         brushfile = [e for e in folder_paths.get_filename_list('inpaint') if re.search(pattern, e, re.IGNORECASE)]
@@ -2713,7 +2749,7 @@ class applyInpaint:
         clip_name = os.path.join("powerpaint",os.path.basename(clip_parsed_url.path))
         return model_name, clip_name
 
-    def apply(self, pipe, image, mask, inpaint_mode, encode, grow_mask_by, dtype, fitting, function, scale, start_at, end_at):
+    def apply(self, pipe, image, mask, inpaint_mode, encode, grow_mask_by, dtype, fitting, function, scale, start_at, end_at, noise_mask=True):
         new_pipe = {
             **pipe,
         }
@@ -2748,9 +2784,9 @@ class applyInpaint:
                                                      list(FOOOCUS_INPAINT_HEAD.keys())[0],
                                                      list(FOOOCUS_INPAINT_PATCH.keys())[0])
                 new_pipe['model'] = model
-                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, 0)
+                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, 0, noise_mask=noise_mask)
             else:
-                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, grow_mask_by)
+                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, grow_mask_by, noise_mask=noise_mask)
         elif encode == 'different_diffusion':
             if inpaint_mode == 'fooocus_inpaint':
                 latent, = VAEEncodeForInpaint().encode(vae, image, mask, grow_mask_by)
@@ -2759,9 +2795,9 @@ class applyInpaint:
                                                      list(FOOOCUS_INPAINT_HEAD.keys())[0],
                                                      list(FOOOCUS_INPAINT_PATCH.keys())[0])
                 new_pipe['model'] = model
-                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, 0)
+                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, 0, noise_mask=noise_mask)
             else:
-                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, grow_mask_by)
+                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, grow_mask_by, noise_mask=noise_mask)
             cls = ALL_NODE_CLASS_MAPPINGS['DifferentialDiffusion']
             if cls is not None:
                 model, = cls().apply(new_pipe['model'])
@@ -2964,6 +3000,7 @@ class ipadapter:
             'VIT-G (medium strength)',
             'PLUS (high strength)',
             'PLUS (kolors genernal)',
+            'FLUX.1-dev',
             'PLUS FACE (portraits)',
             'FULL FACE - SD1.5 only (portraits stronger)',
             'COMPOSITION'
@@ -2986,111 +3023,114 @@ class ipadapter:
     def get_clipvision_file(self, preset, node_name):
         preset = preset.lower()
         clipvision_list = folder_paths.get_filename_list("clip_vision")
-
-        if preset.startswith("plus (kolors") or preset.startswith("faceid plus kolors"):
-            pattern = 'Vit.Large.patch14.336\.(bin|safetensors)$'
+        if preset.startswith("flux"):
+            # pattern = 'sigclip.vision.patch14.384'
+            pattern = 'siglip.so400m.patch14.384'
+        elif preset.startswith("plus (kolors") or preset.startswith("faceid plus kolors"):
+            pattern = 'Vit.Large.patch14.336.(bin|safetensors)$'
         elif preset.startswith("vit-g"):
-            pattern = '(ViT.bigG.14.*39B.b160k|ipadapter.*sdxl|sdxl.*model\.(bin|safetensors))'
+            pattern = '(ViT.bigG.14.*39B.b160k|ipadapter.*sdxl|sdxl.*model.(bin|safetensors))'
         else:
-            pattern = '(ViT.H.14.*s32B.b79K|ipadapter.*sd15|sd1.?5.*model\.(bin|safetensors))'
+            pattern = '(ViT.H.14.*s32B.b79K|ipadapter.*sd15|sd1.?5.*model.(bin|safetensors))'
         clipvision_files = [e for e in clipvision_list if re.search(pattern, e, re.IGNORECASE)]
-
         clipvision_name = clipvision_files[0] if len(clipvision_files)>0 else None
         clipvision_file = folder_paths.get_full_path("clip_vision", clipvision_name) if clipvision_name else None
         # if clipvision_name is not None:
         #     log_node_info(node_name, f"Using {clipvision_name}")
-
         return clipvision_file, clipvision_name
 
-    def get_ipadapter_file(self, preset, is_sdxl, node_name):
+    def get_ipadapter_file(self, preset, model_type, node_name):
         preset = preset.lower()
         ipadapter_list = folder_paths.get_filename_list("ipadapter")
         is_insightface = False
         lora_pattern = None
+        is_sdxl = model_type == 'sdxl'
 
         if preset.startswith("light"):
             if is_sdxl:
                 raise Exception("light model is not supported for SDXL")
-            pattern = 'sd15.light.v11\.(safetensors|bin)$'
+            pattern = 'sd15.light.v11.(safetensors|bin)$'
             # if light model v11 is not found, try with the old version
             if not [e for e in ipadapter_list if re.search(pattern, e, re.IGNORECASE)]:
-                pattern = 'sd15.light\.(safetensors|bin)$'
+                pattern = 'sd15.light.(safetensors|bin)$'
         elif preset.startswith("standard"):
             if is_sdxl:
-                pattern = 'ip.adapter.sdxl.vit.h\.(safetensors|bin)$'
+                pattern = 'ip.adapter.sdxl.vit.h.(safetensors|bin)$'
             else:
-                pattern = 'ip.adapter.sd15\.(safetensors|bin)$'
+                pattern = 'ip.adapter.sd15.(safetensors|bin)$'
         elif preset.startswith("vit-g"):
             if is_sdxl:
-                pattern = 'ip.adapter.sdxl\.(safetensors|bin)$'
+                pattern = 'ip.adapter.sdxl.(safetensors|bin)$'
             else:
-                pattern = 'sd15.vit.g\.(safetensors|bin)$'
+                pattern = 'sd15.vit.g.(safetensors|bin)$'
+        elif preset.startswith("flux"):
+            pattern = 'ip.adapter.flux.1.dev.(safetensors|bin)$'
         elif preset.startswith("plus (high"):
             if is_sdxl:
-                pattern = 'plus.sdxl.vit.h\.(safetensors|bin)$'
+                pattern = 'plus.sdxl.vit.h.(safetensors|bin)$'
             else:
-                pattern = 'ip.adapter.plus.sd15\.(safetensors|bin)$'
+                pattern = 'ip.adapter.plus.sd15.(safetensors|bin)$'
         elif preset.startswith("plus (kolors"):
             if is_sdxl:
-                pattern = 'plus.gener(nal|al)\.(safetensors|bin)$'
+                pattern = 'plus.gener(nal|al).(safetensors|bin)$'
             else:
                 raise Exception("kolors model is not supported for SD15")
         elif preset.startswith("plus face"):
             if is_sdxl:
-                pattern = 'plus.face.sdxl.vit.h\.(safetensors|bin)$'
+                pattern = 'plus.face.sdxl.vit.h.(safetensors|bin)$'
             else:
-                pattern = 'plus.face.sd15\.(safetensors|bin)$'
+                pattern = 'plus.face.sd15.(safetensors|bin)$'
         elif preset.startswith("full"):
             if is_sdxl:
                 raise Exception("full face model is not supported for SDXL")
-            pattern = 'full.face.sd15\.(safetensors|bin)$'
+            pattern = 'full.face.sd15.(safetensors|bin)$'
         elif preset.startswith("composition"):
             if is_sdxl:
-                pattern = 'plus.composition.sdxl\.(safetensors|bin)$'
+                pattern = 'plus.composition.sdxl.(safetensors|bin)$'
             else:
-                pattern = 'plus.composition.sd15\.(safetensors|bin)$'
+                pattern = 'plus.composition.sd15.(safetensors|bin)$'
         elif preset.startswith("faceid portrait ("):
             if is_sdxl:
-                pattern = 'portrait.sdxl\.(safetensors|bin)$'
+                pattern = 'portrait.sdxl.(safetensors|bin)$'
             else:
-                pattern = 'portrait.v11.sd15\.(safetensors|bin)$'
+                pattern = 'portrait.v11.sd15.(safetensors|bin)$'
                 # if v11 is not found, try with the old version
                 if not [e for e in ipadapter_list if re.search(pattern, e, re.IGNORECASE)]:
-                    pattern = 'portrait.sd15\.(safetensors|bin)$'
+                    pattern = 'portrait.sd15.(safetensors|bin)$'
             is_insightface = True
         elif preset.startswith("faceid portrait unnorm"):
             if is_sdxl:
-                pattern = r'portrait.sdxl.unnorm\.(safetensors|bin)$'
+                pattern = r'portrait.sdxl.unnorm.(safetensors|bin)$'
             else:
                 raise Exception("portrait unnorm model is not supported for SD1.5")
             is_insightface = True
         elif preset == "faceid":
             if is_sdxl:
-                pattern = 'faceid.sdxl\.(safetensors|bin)$'
-                lora_pattern = 'faceid.sdxl.lora\.safetensors$'
+                pattern = 'faceid.sdxl.(safetensors|bin)$'
+                lora_pattern = 'faceid.sdxl.lora.safetensors$'
             else:
-                pattern = 'faceid.sd15\.(safetensors|bin)$'
-                lora_pattern = 'faceid.sd15.lora\.safetensors$'
+                pattern = 'faceid.sd15.(safetensors|bin)$'
+                lora_pattern = 'faceid.sd15.lora.safetensors$'
             is_insightface = True
         elif preset.startswith("faceid plus kolors"):
             if is_sdxl:
-                pattern = '(kolors.ip.adapter.faceid.plus|ipa.faceid.plus)\.(safetensors|bin)$'
+                pattern = '(kolors.ip.adapter.faceid.plus|ipa.faceid.plus).(safetensors|bin)$'
             else:
                 raise Exception("faceid plus kolors model is not supported for SD1.5")
             is_insightface = True
         elif preset.startswith("faceid plus -"):
             if is_sdxl:
                 raise Exception("faceid plus model is not supported for SDXL")
-            pattern = 'faceid.plus.sd15\.(safetensors|bin)$'
-            lora_pattern = 'faceid.plus.sd15.lora\.safetensors$'
+            pattern = 'faceid.plus.sd15.(safetensors|bin)$'
+            lora_pattern = 'faceid.plus.sd15.lora.safetensors$'
             is_insightface = True
         elif preset.startswith("faceid plus v2"):
             if is_sdxl:
-                pattern = 'faceid.plusv2.sdxl\.(safetensors|bin)$'
-                lora_pattern = 'faceid.plusv2.sdxl.lora\.safetensors$'
+                pattern = 'faceid.plusv2.sdxl.(safetensors|bin)$'
+                lora_pattern = 'faceid.plusv2.sdxl.lora.safetensors$'
             else:
-                pattern = 'faceid.plusv2.sd15\.(safetensors|bin)$'
-                lora_pattern = 'faceid.plusv2.sd15.lora\.safetensors$'
+                pattern = 'faceid.plusv2.sd15.(safetensors|bin)$'
+                lora_pattern = 'faceid.plusv2.sd15.lora.safetensors$'
             is_insightface = True
         else:
             raise Exception(f"invalid type '{preset}'")
@@ -3106,16 +3146,16 @@ class ipadapter:
     def get_lora_pattern(self, file):
         basename = os.path.basename(file)
         lora_pattern = None
-        if re.search(r'faceid.sdxl\.(safetensors|bin)$', basename, re.IGNORECASE):
-            lora_pattern = 'faceid.sdxl.lora\.safetensors$'
-        elif re.search(r'faceid.sd15\.(safetensors|bin)$', basename, re.IGNORECASE):
-            lora_pattern = 'faceid.sd15.lora\.safetensors$'
-        elif re.search(r'faceid.plus.sd15\.(safetensors|bin)$', basename, re.IGNORECASE):
-            lora_pattern = 'faceid.plus.sd15.lora\.safetensors$'
-        elif re.search(r'faceid.plusv2.sdxl\.(safetensors|bin)$', basename, re.IGNORECASE):
-            lora_pattern = 'faceid.plusv2.sdxl.lora\.safetensors$'
-        elif re.search(r'faceid.plusv2.sd15\.(safetensors|bin)$', basename, re.IGNORECASE):
-            lora_pattern = 'faceid.plusv2.sd15.lora\.safetensors$'
+        if re.search(r'faceid.sdxl.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.sdxl.lora.safetensors$'
+        elif re.search(r'faceid.sd15.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.sd15.lora.safetensors$'
+        elif re.search(r'faceid.plus.sd15.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.plus.sd15.lora.safetensors$'
+        elif re.search(r'faceid.plusv2.sdxl.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.plusv2.sdxl.lora.safetensors$'
+        elif re.search(r'faceid.plusv2.sd15.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.plusv2.sd15.lora.safetensors$'
 
         return lora_pattern
 
@@ -3132,7 +3172,7 @@ class ipadapter:
             return (model, clip)
 
     def ipadapter_model_loader(self, file):
-        model = comfy.utils.load_torch_file(file, safe_load=True)
+        model = comfy.utils.load_torch_file(file, safe_load=False)
 
         if file.lower().endswith(".safetensors"):
             st_model = {"image_proj": {}, "ip_adapter": {}}
@@ -3178,7 +3218,29 @@ class ipadapter:
         if not clip_vision:
             clipvision_file, clipvision_name = self.get_clipvision_file(preset, node_name)
             if clipvision_file is None:
-                if preset.lower().startswith("plus (kolors"):
+                if preset.lower().startswith("flux"):
+                    # model_url = IPADAPTER_CLIPVISION_MODELS["sigclip_vision_patch14_384"]["model_url"]
+                    # clipvision_file = get_local_filepath(model_url, IPADAPTER_DIR, "sigclip_vision_patch14_384.bin")
+                    from huggingface_hub import snapshot_download
+                    import shutil
+                    CLIP_PATH = os.path.join(folder_paths.models_dir, "clip_vision", "google--siglip-so400m-patch14-384")
+                    print("CLIP_VISION not found locally. Downloading google/siglip-so400m-patch14-384...")
+                    try:
+                        snapshot_download(
+                            repo_id="google/siglip-so400m-patch14-384",
+                            local_dir=os.path.join(folder_paths.models_dir, "clip_vision",
+                                                   "cache--google--siglip-so400m-patch14-384"),
+                            local_dir_use_symlinks=False,
+                            resume_download=True
+                        )
+                        shutil.move(os.path.join(folder_paths.models_dir, "clip_vision",
+                                                 "cache--google--siglip-so400m-patch14-384"), CLIP_PATH)
+                        print(f"CLIP_VISION has been downloaded to {CLIP_PATH}")
+                    except Exception as e:
+                        print(f"Error downloading CLIP model: {e}")
+                        raise
+                    clipvision_file = CLIP_PATH
+                elif preset.lower().startswith("plus (kolors"):
                     model_url = IPADAPTER_CLIPVISION_MODELS["clip-vit-large-patch14-336"]["model_url"]
                     clipvision_file = get_local_filepath(model_url, IPADAPTER_DIR, "clip-vit-large-patch14-336.bin")
                 else:
@@ -3191,21 +3253,30 @@ class ipadapter:
                 log_node_info("easy ipadapterApply", f"Using ClipVisonModel {clipvision_name} Cached")
                 _, clip_vision = backend_cache.cache[clipvision_name][1]
             else:
-                clip_vision = load_clip_vision(clipvision_file)
+                if preset.lower().startswith("flux"):
+                    from transformers import SiglipVisionModel, AutoProcessor
+                    image_encoder_path = os.path.dirname(clipvision_file)
+                    image_encoder = SiglipVisionModel.from_pretrained(image_encoder_path)
+                    clip_image_processor = AutoProcessor.from_pretrained(image_encoder_path)
+                    clip_vision = {
+                        'image_encoder': image_encoder,
+                        'clip_image_processor': clip_image_processor
+                    }
+                else:
+                    clip_vision = load_clip_vision(clipvision_file)
                 log_node_info("easy ipadapterApply", f"Using ClipVisonModel {clipvision_name}")
                 if cache_mode in ["all", "clip_vision only"]:
                     backend_cache.update_cache(clipvision_name, 'clip_vision', (False, clip_vision))
             pipeline['clipvision']['file'] = clipvision_file
             pipeline['clipvision']['model'] = clip_vision
-
         # 2. Load the ipadapter model
-        is_sdxl = isinstance(model.model, comfy.model_base.SDXL)
+        model_type = get_sd_version(model)
         if not ipadapter:
-            ipadapter_file, ipadapter_name, is_insightface, lora_pattern = self.get_ipadapter_file(preset, is_sdxl, node_name)
-            model_type = 'sdxl' if is_sdxl else 'sd15'
+            ipadapter_file, ipadapter_name, is_insightface, lora_pattern = self.get_ipadapter_file(preset, model_type, node_name)
             if ipadapter_file is None:
                 model_url = IPADAPTER_MODELS[preset][model_type]["model_url"]
-                ipadapter_file = get_local_filepath(model_url, IPADAPTER_DIR)
+                local_file_name = IPADAPTER_MODELS[preset][model_type]['model_file_name'] if "model_file_name" in IPADAPTER_MODELS[preset][model_type] else None
+                ipadapter_file = get_local_filepath(model_url, IPADAPTER_DIR, local_file_name)
                 ipadapter_name = os.path.basename(model_url)
             if ipadapter_file == pipeline['ipadapter']['file']:
                 ipadapter = pipeline['ipadapter']['model']
@@ -3258,7 +3329,7 @@ class ipadapterApply(ipadapter):
                 "image": ("IMAGE",),
                 "preset": (presets,),
                 "lora_strength": ("FLOAT", {"default": 0.6, "min": 0, "max": 1, "step": 0.01}),
-                "provider": (["CPU", "CUDA", "ROCM", "DirectML", "OpenVINO", "CoreML"],),
+                "provider": (["CPU", "CUDA", "ROCM", "DirectML", "OpenVINO", "CoreML"], {"default": "CUDA"}),
                 "weight": ("FLOAT", {"default": 1.0, "min": -1, "max": 3, "step": 0.05}),
                 "weight_faceidv2": ("FLOAT", { "default": 1.0, "min": -1, "max": 5.0, "step": 0.05 }),
                 "start_at": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
@@ -3281,7 +3352,10 @@ class ipadapterApply(ipadapter):
     def apply(self, model, image, preset, lora_strength, provider, weight, weight_faceidv2, start_at, end_at, cache_mode, use_tiled, attn_mask=None, optional_ipadapter=None, weight_kolors=None):
         images, masks = image, [None]
         model, ipadapter = self.load_model(model, preset, lora_strength, provider, clip_vision=None, optional_ipadapter=optional_ipadapter, cache_mode=cache_mode)
-        if use_tiled and preset not in self.faceid_presets:
+        if preset in ['FLUX.1-dev']:
+            from .ipadapter import InstantXFluxIpadapterApply
+            model, images = InstantXFluxIpadapterApply().apply_ipadapter_flux(model, ipadapter, image, weight, start_at, end_at, provider)
+        elif use_tiled and preset not in self.faceid_presets:
             if "IPAdapterTiled" not in ALL_NODE_CLASS_MAPPINGS:
                 self.error()
             cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterTiled"]
@@ -3319,7 +3393,7 @@ class ipadapterApplyAdvanced(ipadapter):
                 "image": ("IMAGE",),
                 "preset": (presets,),
                 "lora_strength": ("FLOAT", {"default": 0.6, "min": 0, "max": 1, "step": 0.01}),
-                "provider": (["CPU", "CUDA", "ROCM", "DirectML", "OpenVINO", "CoreML"],),
+                "provider": (["CPU", "CUDA", "ROCM", "DirectML", "OpenVINO", "CoreML"], {"default": "CUDA"}),
                 "weight": ("FLOAT", {"default": 1.0, "min": -1, "max": 3, "step": 0.05}),
                 "weight_faceidv2": ("FLOAT", {"default": 1.0, "min": -1, "max": 5.0, "step": 0.05 }),
                 "weight_type": (weight_types,),
@@ -3396,7 +3470,7 @@ class ipadapterApplyFaceIDKolors(ipadapterApplyAdvanced):
                 "image": ("IMAGE",),
                 "preset": (['FACEID PLUS KOLORS'], {"default":"FACEID PLUS KOLORS"}),
                 "lora_strength": ("FLOAT", {"default": 0.6, "min": 0, "max": 1, "step": 0.01}),
-                "provider": (["CPU", "CUDA", "ROCM", "DirectML", "OpenVINO", "CoreML"],),
+                "provider": (["CPU", "CUDA", "ROCM", "DirectML", "OpenVINO", "CoreML"], {"default": "CUDA"}),
                 "weight": ("FLOAT", {"default": 0.8, "min": -1, "max": 3, "step": 0.05}),
                 "weight_faceidv2": ("FLOAT", {"default": 1.0, "min": -1, "max": 5.0, "step": 0.05}),
                 "weight_kolors": ("FLOAT", {"default": 0.8, "min": -1, "max": 5.0, "step": 0.05}),
@@ -3992,6 +4066,30 @@ class applyPulIDADV(applyPulID):
             },
         }
 
+# class applyOminiControl:
+#     @classmethod
+#     def INPUT_TYPES(s):
+#         return {
+#             "required": {
+#                 "model": ("MODEL",),
+#                 "image": ("IMAGE",),
+#                 "vae": ("VAE",),
+#             },
+#             "optional": {
+#             },
+#         }
+#
+#     RETURN_TYPES = ("MODEL",)
+#     RETURN_NAMES = ("model",)
+#
+#     FUNCTION = "apply"
+#     CATEGORY = "EasyUse/Adapter"
+#
+#     def apply(self, model, image, vae):
+#         from .omini_control import apply_omini_control
+#         new_model = apply_omini_control(model, image, vae)
+#         return (new_model,)
+
 # ---------------------------------------------------------------适配器 结束----------------------------------------------------------------------#
 
 #---------------------------------------------------------------预采样 开始----------------------------------------------------------------------#
@@ -4089,7 +4187,7 @@ class samplerSettingsAdvanced:
                      "scheduler": (comfy.samplers.KSampler.SCHEDULERS + new_schedulers,),
                      "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
                      "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
-                     "add_noise": (["enable", "disable"],),
+                     "add_noise": (["enable (CPU)", "enable (GPU=A1111)", "disable"], {"default": "enable (CPU)"}),
                      "seed": ("INT", {"default": 0, "min": 0, "max": MAX_SEED_NUM}),
                      "return_with_leftover_noise": (["disable", "enable"], ),
                      },
@@ -4321,7 +4419,7 @@ class samplerCustomSettings:
     def INPUT_TYPES(cls):
         return {"required": {
                      "pipe": ("PIPE_LINE",),
-                     "guider": (['CFG','DualCFG','IP2P+DualCFG','Basic'],{"default":"Basic"}),
+                     "guider": (['CFG','DualCFG','Basic', 'IP2P+CFG', 'IP2P+DualCFG','IP2P+Basic'],{"default":"Basic"}),
                      "cfg": ("FLOAT", {"default": 3.5, "min": 0.0, "max": 100.0}),
                      "cfg_negative": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 100.0}),
                      "sampler_name": (comfy.samplers.KSampler.SAMPLERS + ['inversed_euler'],),
@@ -4336,7 +4434,7 @@ class samplerCustomSettings:
                      "eps_s": ("FLOAT", {"default": 0.001, "min": 0.0, "max": 1.0, "step": 0.0001, "round": False}),
                      "flip_sigmas": ("BOOLEAN", {"default": False}),
                      "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                     "add_noise": (["enable", "disable"], {"default": "enable"}),
+                     "add_noise": (["enable (CPU)", "enable (GPU=A1111)", "disable"], {"default": "enable (CPU)"}),
                      "seed": ("INT", {"default": 0, "min": 0, "max": MAX_SEED_NUM}),
                  },
                 "optional": {
@@ -4355,6 +4453,35 @@ class samplerCustomSettings:
     FUNCTION = "settings"
     CATEGORY = "EasyUse/PreSampling"
 
+    def ip2p(self, positive, negative, vae, pixels, latent=None):
+        if latent is not None:
+            concat_latent = latent
+        else:
+            x = (pixels.shape[1] // 8) * 8
+            y = (pixels.shape[2] // 8) * 8
+
+            if pixels.shape[1] != x or pixels.shape[2] != y:
+                x_offset = (pixels.shape[1] % 8) // 2
+                y_offset = (pixels.shape[2] % 8) // 2
+                pixels = pixels[:,x_offset:x + x_offset, y_offset:y + y_offset,:]
+
+            concat_latent = vae.encode(pixels)
+
+        out_latent = {}
+        out_latent["samples"] = torch.zeros_like(concat_latent)
+
+        out = []
+        for conditioning in [positive, negative]:
+            c = []
+            for t in conditioning:
+                d = t[1].copy()
+                d["concat_latent_image"] = concat_latent
+                n = [t[0], d]
+                c.append(n)
+            out.append(c)
+        return (out[0], out[1], out_latent)
+
+
     def settings(self, pipe, guider, cfg, cfg_negative, sampler_name, scheduler, coeff, steps, sigma_max, sigma_min, rho, beta_d, beta_min, eps_s, flip_sigmas, denoise, add_noise, seed, image_to_latent=None, latent=None, optional_sampler=None, optional_sigmas=None, prompt=None, extra_pnginfo=None, my_unique_id=None):
 
         # 图生图转换
@@ -4370,7 +4497,7 @@ class samplerCustomSettings:
                 samples = pipe["samples"]
                 images = pipe["images"]
             else:
-                if guider == "IP2P+DualCFG":
+                if "IP2P" in guider:
                     positive, negative, latent = self.ip2p(pipe['positive'], pipe['negative'], vae, image_to_latent)
                     samples = latent
                 else:
@@ -4378,7 +4505,7 @@ class samplerCustomSettings:
                     samples = RepeatLatentBatch().repeat(samples, batch_size)[0]
                 images = image_to_latent
         elif latent is not None:
-            if guider == "IP2P+DualCFG":
+            if "IP2P" in guider:
                 positive, negative, latent = self.ip2p(pipe['positive'], pipe['negative'], latent=latent)
                 samples = latent
             else:
@@ -5050,7 +5177,7 @@ class samplerFull:
             to["model_patch"] = {}
         return to
 
-    def get_sampler_custom(self, model, positive, negative, seed, loader_settings):
+    def get_sampler_custom(self, model, positive, negative, loader_settings):
         _guider = None
         middle = loader_settings['middle'] if "middle" in loader_settings else negative
         steps = loader_settings['steps'] if "steps" in loader_settings else 20
@@ -5068,7 +5195,6 @@ class samplerFull:
         coeff = loader_settings['custom']['coeff'] if "coeff" in loader_settings['custom'] else 1.2
         flip_sigmas = loader_settings['custom']['flip_sigmas'] if "flip_sigmas" in loader_settings['custom'] else False
         denoise = loader_settings['denoise'] if "denoise" in loader_settings else 1.0
-        add_noise = loader_settings['add_noise'] if "add_noise" in loader_settings else "enable"
         optional_sigmas = loader_settings['optional_sigmas'] if "optional_sigmas" in loader_settings else None
         optional_sampler = loader_settings['optional_sampler'] if "optional_sampler" in loader_settings else None
 
@@ -5129,7 +5255,7 @@ class samplerFull:
                 c.append(n)
             positive = c
 
-        if guider == 'CFG':
+        if guider in ['CFG', 'IP2P+CFG']:
             _guider, = self.get_custom_cls('CFGGuider').get_guider(model, positive, negative, cfg)
         elif guider in ['DualCFG', 'IP2P+DualCFG']:
             _guider, = self.get_custom_cls('DualCFGGuider').get_guider(model, positive, middle,
@@ -5146,13 +5272,8 @@ class samplerFull:
             else:
                 _sampler, = self.get_custom_cls('KSamplerSelect').get_sampler(sampler_name)
 
-        # noise
-        if add_noise == 'disable':
-            noise, = self.get_custom_cls('DisableNoise').get_noise()
-        else:
-            noise, = self.get_custom_cls('RandomNoise').get_noise(seed)
 
-        return (noise, _guider, _sampler, sigmas)
+        return (_guider, _sampler, sigmas)
 
     def run(self, pipe, steps, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, seed=None, model=None, positive=None, negative=None, latent=None, vae=None, clip=None, xyPlot=None, tile_size=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False, downscale_options=None, image=None):
 
@@ -5176,7 +5297,7 @@ class samplerFull:
         denoise = denoise if denoise is not None else pipe['loader_settings']['denoise']
         add_noise = pipe['loader_settings']['add_noise'] if 'add_noise' in pipe['loader_settings'] else 'enabled'
         force_full_denoise = pipe['loader_settings']['force_full_denoise'] if 'force_full_denoise' in pipe['loader_settings'] else True
-        noise_device = 'GPU' if 'a1111_prompt_style' in pipe['loader_settings'] and pipe['loader_settings']['a1111_prompt_style'] else 'CPU'
+        noise_device = 'GPU' if ('a1111_prompt_style' in pipe['loader_settings'] and pipe['loader_settings']['a1111_prompt_style']) or add_noise == 'enable (GPU=A1111)' else 'CPU'
 
         if image is not None and latent is None:
             samp_samples = {"samples": samp_vae.encode(image[:, :, :, :3])}
@@ -5255,8 +5376,8 @@ class samplerFull:
             start_time = int(time.time() * 1000)
             # 开始推理
             if samp_custom is not None:
-                noise, _guider, _sampler, sigmas = self.get_sampler_custom(samp_model, samp_positive, samp_negative, samp_seed, samp_custom)
-                samp_samples, samp_blend_samples = sampler.custom_advanced_ksampler(noise, _guider, _sampler, sigmas, samp_samples, preview_latent=preview_latent)
+                _guider, _sampler, sigmas = self.get_sampler_custom(samp_model, samp_positive, samp_negative, samp_custom)
+                samp_samples, samp_blend_samples = sampler.custom_advanced_ksampler(_guider, _sampler, sigmas, samp_samples, add_noise, samp_seed, preview_latent=preview_latent)
             elif scheduler == 'align_your_steps':
                 model_type = get_sd_version(samp_model)
                 if model_type == 'unknown':
@@ -5741,7 +5862,7 @@ class samplerSimpleInpainting(samplerFull):
     CATEGORY = "EasyUse/Sampler"
 
     def dd(self, model, positive, negative, pixels, vae, mask):
-        positive, negative, latent = InpaintModelConditioning().encode(positive, negative, pixels, vae, mask)
+        positive, negative, latent = InpaintModelConditioning().encode(positive, negative, pixels, vae, mask, noise_mask=True)
         cls = ALL_NODE_CLASS_MAPPINGS['DifferentialDiffusion']
         if cls is not None:
             model, = cls().apply(model)
@@ -5754,15 +5875,15 @@ class samplerSimpleInpainting(samplerFull):
         if type == 'random':
             brush_model = BRUSHNET_MODELS['random_mask'][model_type]['model_url']
             if model_type == 'sdxl':
-                pattern = 'brushnet.random.mask.sdxl.*\.(safetensors|bin)$'
+                pattern = 'brushnet.random.mask.sdxl.*.(safetensors|bin)$'
             else:
-                pattern = 'brushnet.random.mask.*\.(safetensors|bin)$'
+                pattern = 'brushnet.random.mask.*.(safetensors|bin)$'
         elif type == 'segmentation':
             brush_model = BRUSHNET_MODELS['segmentation_mask'][model_type]['model_url']
             if model_type == 'sdxl':
-                pattern = 'brushnet.segmentation.mask.sdxl.*\.(safetensors|bin)$'
+                pattern = 'brushnet.segmentation.mask.sdxl.*.(safetensors|bin)$'
             else:
-                pattern = 'brushnet.segmentation.mask.*\.(safetensors|bin)$'
+                pattern = 'brushnet.segmentation.mask.*.(safetensors|bin)$'
 
 
         brushfile = [e for e in folder_paths.get_filename_list('inpaint') if re.search(pattern, e, re.IGNORECASE)]
@@ -5803,7 +5924,7 @@ class samplerSimpleInpainting(samplerFull):
         elif additional == 'InpaintModelCond':
             if mask is not None:
                 mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
-            positive, negative, latent = InpaintModelConditioning().encode(positive, negative, images, vae, mask)
+            positive, negative, latent = InpaintModelConditioning().encode(positive, negative, images, vae, mask, True)
         elif additional == 'Fooocus Inpaint':
             head = list(FOOOCUS_INPAINT_HEAD.keys())[0]
             patch = list(FOOOCUS_INPAINT_PATCH.keys())[0]
@@ -7777,6 +7898,39 @@ class stableDiffusion3API:
         output_image = stableAPI.generate_sd3_image(positive, negative, aspect_ratio, seed=seed, mode=mode, model=model, strength=denoise, image=optional_image)
         return (output_image,)
 
+from .libs.fluxai import fluxaiAPI
+
+class fluxPromptGenAPI:
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "describe": ("STRING", {"default": "", "placeholder": "Describe your image idea (you can use any language)", "multiline": True}),
+            },
+            "optional": {
+                "cookie_override": ("STRING", {"default": "", "forceInput": True}),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("prompt",)
+
+    FUNCTION = "generate"
+    OUTPUT_NODE = False
+
+    CATEGORY = "EasyUse/API"
+
+    def generate(self, describe, cookie_override=None, prompt=None, unique_id=None, extra_pnginfo=None):
+        prompt = fluxaiAPI.promptGenerate(describe, cookie_override)
+        return (prompt,)
+
+
 #---------------------------------------------------------------API 结束----------------------------------------------------------------------
 
 NODE_CLASS_MAPPINGS = {
@@ -7831,6 +7985,7 @@ NODE_CLASS_MAPPINGS = {
     "easy pulIDApplyADV": applyPulIDADV,
     "easy styleAlignedBatchAlign": styleAlignedBatchAlign,
     "easy icLightApply": icLightApply,
+    # "easy ominiControlApply": applyOminiControl,
     # Inpaint 内补
     "easy applyFooocusInpaint": applyFooocusInpaint,
     "easy applyBrushNet": applyBrushNet,
@@ -7901,6 +8056,7 @@ NODE_CLASS_MAPPINGS = {
     "dynamicThresholdingFull": dynamicThresholdingFull,
     # api 相关
     "easy stableDiffusion3API": stableDiffusion3API,
+    "easy fluxPromptGenAPI": fluxPromptGenAPI,
     # utils
     "easy ckptNames": setCkptName,
     "easy controlnetNames": setControlName,
@@ -7958,6 +8114,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy pulIDApplyADV": "Easy Apply PuLID (Advanced)",
     "easy styleAlignedBatchAlign": "Easy Apply StyleAlign",
     "easy icLightApply": "Easy Apply ICLight",
+    "easy ominiControlApply": "Easy Apply OminiContol",
     # Inpaint 内补
     "easy applyFooocusInpaint": "Easy Apply Fooocus Inpaint",
     "easy applyBrushNet": "Easy Apply BrushNet",
@@ -8028,6 +8185,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "dynamicThresholdingFull": "DynamicThresholdingFull",
     # api 相关
     "easy stableDiffusion3API": "Stable Diffusion 3 (API)",
+    "easy fluxPromptGenAPI": "Flux Prompt Gen (API)",
     # utils
     "easy ckptNames": "Ckpt Names",
     "easy controlnetNames": "ControlNet Names",

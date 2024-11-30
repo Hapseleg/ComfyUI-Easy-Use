@@ -991,6 +991,29 @@ class Blocker:
 # 是否为SDXL
 from comfy.sdxl_clip import SDXLClipModel, SDXLRefinerClipModel, SDXLClipG
 
+class isMaskEmpty:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mask": ("MASK",),
+            },
+            "optional": {
+            }
+        }
+
+    RETURN_TYPES = ("BOOLEAN",)
+    RETURN_NAMES = ("boolean",)
+    FUNCTION = "execute"
+    CATEGORY = "EasyUse/Logic"
+
+    def execute(self, mask):
+        if mask is None:
+            return (True,)
+        if torch.all(mask == 0):
+            return (True,)
+        return (False,)
+
 
 class isNone:
     @classmethod
@@ -1193,7 +1216,12 @@ class indexAnything:
     CATEGORY = "EasyUse/Logic"
 
     def getIndex(self, any, index):
-        return (any[index],)
+        if isinstance(any, torch.Tensor):
+            batch_index = min(any.shape[0] - 1, index)
+            s = any[index:index + 1].clone()
+            return (s,)
+        else:
+            return (any[index],)
 
 
 class batchAnything:
@@ -1319,6 +1347,8 @@ class showAnything:
                 try:
                     if type(val) is str:
                         values.append(val)
+                    elif type(val) is list:
+                        values = val
                     else:
                         val = json.dumps(val)
                         values.append(str(val))
@@ -1651,12 +1681,7 @@ class saveText:
             os.makedirs(output_file_path)
 
         if not overwrite:
-            while os.path.exists(filepath):
-                if os.path.exists(filepath):
-                    filepath = str(os.path.join(output_file_path, file_name)) + "_" + str(index) + "." + file_extension
-                    index = index + 1
-                else:
-                    break
+            pass
 
         log_node_info("Save Text", f"Saving to {filepath}")
 
@@ -1780,6 +1805,7 @@ NODE_CLASS_MAPPINGS = {
     "easy forLoopEnd": forLoopEnd,
     "easy blocker": Blocker,
     "easy ifElse": IfElse,
+    "easy isMaskEmpty": isMaskEmpty,
     "easy isNone": isNone,
     "easy isSDXL": isSDXL,
     "easy isFileExist": isFileExist,
@@ -1828,6 +1854,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy forLoopEnd": "For Loop End",
     "easy ifElse": "If else",
     "easy blocker": "Blocker",
+    "easy isMaskEmpty": "Is Mask Empty",
     "easy isNone": "Is None",
     "easy isSDXL": "Is SDXL",
     "easy isFileExist": "Is File Exist",
