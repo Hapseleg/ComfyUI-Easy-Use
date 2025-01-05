@@ -1256,7 +1256,6 @@ class batchAnything:
         return samples_out
 
     def batch(self, any_1, any_2):
-
         if isinstance(any_1, torch.Tensor) or isinstance(any_2, torch.Tensor):
             if any_1 is None:
                 return (any_2,)
@@ -1271,13 +1270,17 @@ class batchAnything:
                 return (any_1,)
             elif isinstance(any_2, tuple):
                 return (any_2 + (any_1,),)
-            return ((any_1, any_2),)
+            elif isinstance(any_2, list):
+                return (any_2 + [any_1],)
+            return ([any_1, any_2],)
         elif isinstance(any_2, (str, float, int)):
             if any_1 is None:
                 return (any_2,)
             elif isinstance(any_1, tuple):
                 return (any_1 + (any_2,),)
-            return ((any_2, any_1),)
+            elif isinstance(any_1, list):
+                return (any_1 + [any_2],)
+            return ([any_2, any_1],)
         elif isinstance(any_1, dict) and 'samples' in any_1:
             if any_2 is None:
                 return (any_1,)
@@ -1728,7 +1731,7 @@ class saveText:
             if not os.path.isabs(output_file_path):
                 output_path = os.path.join(self.output_dir, output_path)
             base_output = os.path.basename(output_path)
-            if output_path.endswith("ComfyUI/output") or output_path.endswith("ComfyUI\output"):
+            if output_path.endswith("ComfyUI/output") or output_path.endswith(r"ComfyUI\output"):
                 base_output = ""
 
             # Check output destination

@@ -1,5 +1,6 @@
 import os
 import json
+import copy
 import hashlib
 import folder_paths
 import torch
@@ -17,7 +18,7 @@ from torchvision.transforms.functional import to_pil_image
 from .libs.log import log_node_info
 from .libs.utils import AlwaysEqualProxy, ByPassTypeTuple
 from .libs.cache import cache, update_cache, remove_cache
-from .libs.image import pil2tensor, tensor2pil, ResizeMode, get_new_bounds, RGB2RGBA, image2mask
+from .libs.image import pil2tensor, tensor2pil, ResizeMode, get_new_bounds, RGB2RGBA, image2mask, empty_image
 from .libs.colorfix import adain_color_fix, wavelet_color_fix
 from .libs.chooser import ChooserMessage, ChooserCancelled
 from .config import REMBG_DIR, REMBG_MODELS, HUMANPARSING_MODELS, MEDIAPIPE_MODELS, MEDIAPIPE_DIR
@@ -801,10 +802,10 @@ class imageRemBg:
         "rem_mode": (("RMBG-2.0", "RMBG-1.4","Inspyrenet"), {"default": "RMBG-1.4"}),
         "image_output": (["Hide", "Preview", "Save", "Hide/Save"], {"default": "Preview"}),
         "save_prefix": ("STRING", {"default": "ComfyUI"}),
-
       },
       "optional":{
         "torchscript_jit": ("BOOLEAN", {"default": False}),
+        "add_background": (["none", "white", "black"], {"default": "none"})
       },
       "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
     }
@@ -816,7 +817,8 @@ class imageRemBg:
 
   CATEGORY = "EasyUse/Image"
 
-  def remove(self, rem_mode, images, image_output, save_prefix, torchscript_jit=False, prompt=None, extra_pnginfo=None):
+
+  def remove(self, rem_mode, images, image_output, save_prefix, torchscript_jit=False, add_background='none',prompt=None, extra_pnginfo=None):
     new_images = list()
     masks = list()
     if rem_mode == "RMBG-2.0":
@@ -911,6 +913,13 @@ class imageRemBg:
       new_images = torch.cat(new_images, dim=0)
       masks = torch.cat(masks, dim=0)
 
+    if add_background != 'none':
+
+      _layer = tensor2pil(new_images)
+      _canvas = Image.new('RGB', _layer.size, (255,255,255) if add_background == 'white' else (0, 0, 0))
+      _canvas.paste(_layer, mask=_layer)
+      new_images = pil2tensor(_canvas)
+
     results = easySave(new_images, save_prefix, image_output, prompt, extra_pnginfo)
 
     if image_output in ("Hide", "Hide/Save"):
@@ -956,6 +965,7 @@ class imageChooser(PreviewImage):
 
   def chooser(self, prompt=None, my_unique_id=None, extra_pnginfo=None, **kwargs):
     id = my_unique_id[0]
+    id = id.split('.')[len(id.split('.')) - 1] if "." in id else id
     if id not in ChooserMessage.stash:
       ChooserMessage.stash[id] = {}
     my_stash = ChooserMessage.stash[id]
