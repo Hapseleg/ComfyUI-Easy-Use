@@ -80,9 +80,22 @@ class easyXYPlot():
             value_label = f"neg cond {index + 1}" if index>0 else f"neg cond"
 
         if value_type in ["Positive Prompt S/R"]:
-            value_label = f"pos prompt {index + 1}" if index>0 else f"pos prompt"
+            positive_prompt = plot_image_vars['positive'].split(',')
+            values = value.split(',')
+            value_label = ""
+
+            for word in values:
+                if positive_prompt.count(word) == 0:
+                    value_label += word + ', '
         if value_type in ["Negative Prompt S/R"]:
-            value_label = f"neg prompt {index + 1}" if index>0 else f"neg prompt"
+            negative_prompt = plot_image_vars['negative'].split(',')
+            values = value.split(',')
+            value_label = ""
+
+            for word in values:
+                if negative_prompt.count(word) == 0:
+                    value_label += word + ', '
+            value_label = value
 
         if value_type in ["steps", "cfg", "denoise", "clip_skip",
                           "lora_model_strength", "lora_clip_strength"]:

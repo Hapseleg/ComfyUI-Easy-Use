@@ -224,6 +224,7 @@ class XYplot_PromptSR:
                 "search_txt": ("STRING", {"default": "", "multiline": False}),
                 "replace_all_text": ("BOOLEAN", {"default": False}),
                 "replace_count": ("INT", {"default": 3, "min": 1, "max": 30 - 1}),
+                "skip_base": ("BOOLEAN", {"default": False}),
             }
         }
 
@@ -239,7 +240,7 @@ class XYplot_PromptSR:
     FUNCTION = "xy_value"
     CATEGORY = "EasyUse/XY Inputs"
 
-    def xy_value(self, target_prompt, search_txt, replace_all_text, replace_count, **kwargs):
+    def xy_value(self, target_prompt, search_txt, replace_all_text, replace_count, skip_base, **kwargs):
         axis = None
 
         if target_prompt == "positive":
@@ -249,6 +250,9 @@ class XYplot_PromptSR:
 
         # Create base entry
         values = [(search_txt, None, replace_all_text)]
+
+        if skip_base:
+            values = []
 
         if replace_count > 0:
             # Append additional entries based on replace_count
