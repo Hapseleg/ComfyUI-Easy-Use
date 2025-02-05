@@ -1,7 +1,4 @@
 import os
-import json
-import copy
-import hashlib
 import folder_paths
 import torch
 import numpy as np
@@ -11,7 +8,6 @@ from comfy_extras.nodes_compositing import JoinImageWithAlpha
 from server import PromptServer
 from nodes import MAX_RESOLUTION, NODE_CLASS_MAPPINGS as ALL_NODE_CLASS_MAPPINGS
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
-from PIL.PngImagePlugin import PngInfo
 import torch.nn.functional as F
 from torchvision.transforms import Resize, CenterCrop, GaussianBlur
 from torchvision.transforms.functional import to_pil_image
@@ -819,7 +815,6 @@ class imageConcat:
     return (row,)
 
 # 图片背景移除
-from ..modules.briaai.rembg import BriaRMBG, preprocess_image, postprocess_image
 from ..libs.utils import get_local_filepath, easySave, install_package
 class imageRemBg:
   @classmethod
@@ -827,7 +822,7 @@ class imageRemBg:
     return {
       "required": {
         "images": ("IMAGE",),
-        "rem_mode": (("RMBG-2.0", "RMBG-1.4","Inspyrenet"), {"default": "RMBG-1.4"}),
+        "rem_mode": (("RMBG-2.0", "RMBG-1.4", "Inspyrenet", "BEN2"), {"default": "RMBG-1.4"}),
         "image_output": (["Hide", "Preview", "Save", "Hide/Save"], {"default": "Preview"}),
         "save_prefix": ("STRING", {"default": "ComfyUI"}),
       },
@@ -849,18 +844,22 @@ class imageRemBg:
   def remove(self, rem_mode, images, image_output, save_prefix, torchscript_jit=False, add_background='none',prompt=None, extra_pnginfo=None):
     new_images = list()
     masks = list()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if rem_mode == "RMBG-2.0":
-      repo_id = REMBG_MODELS[rem_mode]['model_url']
-      model_path = os.path.join(REMBG_DIR, 'RMBG-2.0')
-      if not os.path.exists(model_path):
-        from huggingface_hub import snapshot_download
-        snapshot_download(repo_id=repo_id, local_dir=model_path, ignore_patterns=["*.md", "*.txt"])
-      from transformers import AutoModelForImageSegmentation
-      model = AutoModelForImageSegmentation.from_pretrained(model_path, trust_remote_code=True)
-      torch.set_float32_matmul_precision('high')
-      device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-      model.to(device)
-      model.eval()
+      if rem_mode in cache:
+        _, model = cache[rem_mode][1]
+      else:
+        repo_id = REMBG_MODELS[rem_mode]['model_url']
+        model_path = os.path.join(REMBG_DIR, 'RMBG-2.0')
+        if not os.path.exists(model_path):
+          from huggingface_hub import snapshot_download
+          snapshot_download(repo_id=repo_id, local_dir=model_path, ignore_patterns=["*.md", "*.txt"])
+        from transformers import AutoModelForImageSegmentation
+        model = AutoModelForImageSegmentation.from_pretrained(model_path, trust_remote_code=True)
+        torch.set_float32_matmul_precision('high')
+        model.to(device)
+        model.eval()
+        update_cache(rem_mode, 'remove_background', (False, model))
 
       from torchvision import transforms
       transform_image = transforms.Compose([
@@ -870,10 +869,10 @@ class imageRemBg:
       ])
       for image in images:
         orig_im = tensor2pil(image)
-        input_tensor = transform_image(orig_im).unsqueeze(0).to(device)
+        input_image = transform_image(orig_im).unsqueeze(0).to(device)
 
         with torch.no_grad():
-          preds = model(input_tensor)[-1].sigmoid().cpu()
+          preds = model(input_image)[-1].sigmoid().cpu()
           pred = preds[0].squeeze()
 
           mask = transforms.ToPILImage()(pred)
@@ -893,16 +892,19 @@ class imageRemBg:
       masks = torch.cat(masks, dim=0)
 
     elif rem_mode == "RMBG-1.4":
-      # load model
-      model_url = REMBG_MODELS[rem_mode]['model_url']
-      suffix = model_url.split(".")[-1]
-      model_path = get_local_filepath(model_url, REMBG_DIR, rem_mode+'.'+suffix)
+      from ..modules.briaai.rembg import BriaRMBG, preprocess_image, postprocess_image
+      if rem_mode in cache:
+        _, net = cache[rem_mode][1]
+      else:
+        model_url = REMBG_MODELS[rem_mode]['model_url']
+        suffix = model_url.split(".")[-1]
+        model_path = get_local_filepath(model_url, REMBG_DIR, rem_mode+'.'+suffix)
+        net = BriaRMBG()
+        net.load_state_dict(torch.load(model_path, map_location=device))
+        net.to(device)
+        net.eval()
+        update_cache(rem_mode, 'remove_background', (False, net))
 
-      net = BriaRMBG()
-      device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-      net.load_state_dict(torch.load(model_path, map_location=device))
-      net.to(device)
-      net.eval()
       # prepare input
       model_input_size = [1024, 1024]
       for image in images:
@@ -921,6 +923,34 @@ class imageRemBg:
 
       new_images = torch.cat(new_images, dim=0)
       masks = torch.cat(masks, dim=0)
+    elif rem_mode == "BEN2":
+      if rem_mode in cache:
+        _, model = cache[rem_mode][1]
+      else:
+        from ..modules.ben.model import BEN_Base
+        model_url = REMBG_MODELS[rem_mode]['model_url']
+        model_path = get_local_filepath(model_url, REMBG_DIR)
+
+        model = BEN_Base().to(device).eval()
+        model.loadcheckpoints(model_path)
+        update_cache(rem_mode, 'remove_background', (False, model))
+
+      for image in images:
+        input_image = tensor2pil(image)
+
+        if input_image.mode != 'RGBA':
+          input_image = input_image.convert("RGBA")
+
+        mask, new_im = model.inference(input_image)
+
+        new_im_tensor = pil2tensor(new_im)
+        mask_tensor = pil2tensor(mask)
+
+        new_images.append(new_im_tensor)
+        masks.append(mask_tensor)
+
+      new_images = torch.cat(new_images, dim=0)
+      masks = torch.cat(masks, dim=0)
 
     elif rem_mode == "Inspyrenet":
       from tqdm import tqdm
@@ -930,7 +960,11 @@ class imageRemBg:
           install_package("transparent_background")
           from transparent_background import Remover
 
-      remover = Remover(jit=torchscript_jit)
+      if rem_mode in cache:
+        _, remover = cache[rem_mode][1]
+      else:
+        remover = Remover(jit=torchscript_jit)
+        update_cache(rem_mode, 'remove_background', (False, remover))
 
       for img in tqdm(images, "Inspyrenet Rembg"):
         mid = remover.process(tensor2pil(img), type='rgba')
@@ -1882,85 +1916,6 @@ class loadImagesForLoop:
 #       m.update(f.read())
 #     return m.digest().hex()
 
-class saveImageLazy():
-  def __init__(self):
-    self.output_dir = folder_paths.get_output_directory()
-    self.type = "output"
-    self.compress_level = 4
-
-  @classmethod
-  def INPUT_TYPES(s):
-    return {"required":
-          {"images": ("IMAGE",),
-           "filename_prefix": ("STRING", {"default": "ComfyUI"}),
-           "save_metadata": ("BOOLEAN", {"default": True}),
-           },
-        "optional":{},
-        "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
-      }
-
-  RETURN_TYPES = ("IMAGE",)
-  RETURN_NAMES = ("images",)
-  OUTPUT_NODE = False
-  FUNCTION = "save"
-  CATEGORY = "EasyUse/Image"
-
-  def save(self, images, filename_prefix, save_metadata, prompt=None, extra_pnginfo=None):
-    extension = 'png'
-
-    full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
-      filename_prefix, self.output_dir, images[0].shape[1], images[0].shape[0])
-
-    results = list()
-    for (batch_number, image) in enumerate(images):
-      i = 255. * image.cpu().numpy()
-      img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
-      metadata = None
-
-      filename_with_batch_num = filename.replace(
-        "%batch_num%", str(batch_number))
-
-      counter = 1
-
-      if os.path.exists(full_output_folder) and os.listdir(full_output_folder):
-        filtered_filenames = list(filter(
-          lambda filename: filename.startswith(
-            filename_with_batch_num + "_")
-                           and filename[len(filename_with_batch_num) + 1:-4].isdigit(),
-          os.listdir(full_output_folder)
-        ))
-
-        if filtered_filenames:
-          max_counter = max(
-            int(filename[len(filename_with_batch_num) + 1:-4])
-            for filename in filtered_filenames
-          )
-          counter = max_counter + 1
-
-      file = f"{filename_with_batch_num}_{counter:05}.{extension}"
-
-      save_path = os.path.join(full_output_folder, file)
-
-      if save_metadata:
-        metadata = PngInfo()
-        if prompt is not None:
-          metadata.add_text("prompt", json.dumps(prompt))
-        if extra_pnginfo is not None:
-          for x in extra_pnginfo:
-            metadata.add_text(
-              x, json.dumps(extra_pnginfo[x]))
-
-      img.save(save_path, pnginfo=metadata)
-
-      results.append({
-        "filename": file,
-        "subfolder": subfolder,
-        "type": self.type
-      })
-
-    return {"ui": {"images": results} , "result": (images,)}
-
-
 class makeImageForICRepaint:
   @classmethod
   def INPUT_TYPES(s):
@@ -2096,7 +2051,6 @@ NODE_CLASS_MAPPINGS = {
   "easy joinImageBatch": JoinImageBatch,
   "easy humanSegmentation": humanSegmentation,
   "easy removeLocalImage": removeLocalImage,
-  "easy saveImageLazy": saveImageLazy,
   "easy makeImageForICLora": makeImageForICRepaint
 }
 
@@ -2136,6 +2090,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
   "easy imageToBase64": "Image To Base64",
   "easy humanSegmentation": "Human Segmentation",
   "easy removeLocalImage": "Remove Local Image",
-  "easy saveImageLazy": "Save Image (Lazy)",
   "easy makeImageForICLora": "Make Image For ICLora"
 }
