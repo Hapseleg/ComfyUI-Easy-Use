@@ -79,6 +79,11 @@ class easyXYPlot():
         if value_type in ["Neg Condition"]:
             value_label = f"neg cond {index + 1}" if index>0 else f"neg cond"
 
+        # if value_type in ["Positive Prompt S/R"]:
+        #     value_label = f"pos prompt {index + 1}" if index>0 else f"pos prompt"
+        # if value_type in ["Negative Prompt S/R"]:
+        #     value_label = f"neg prompt {index + 1}" if index>0 else f"neg prompt"
+            
         if value_type in ["Positive Prompt S/R"]:
             positive_prompt = plot_image_vars['positive'].split(',')
             values = value.split(',')
