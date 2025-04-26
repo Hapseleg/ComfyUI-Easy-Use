@@ -22,7 +22,6 @@ class showLoaderSettingsNames:
     OUTPUT_NODE = True
 
     CATEGORY = "EasyUse/Util"
-
     def notify(self, pipe, names=None, unique_id=None, extra_pnginfo=None):
         if unique_id and extra_pnginfo and "workflow" in extra_pnginfo:
             workflow = extra_pnginfo["workflow"]
@@ -43,6 +42,60 @@ class showLoaderSettingsNames:
                 node["widgets_values"] = names
 
         return {"ui": {"text": [names]}, "result": (ckpt_name, vae_name, lora_name)}
+
+class showLoaderSettings:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "pipe": ("PIPE_LINE",),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING","STRING", "STRING", "STRING","INT", "INT", "INT","FLOAT", "STRING", "STRING",)
+    RETURN_NAMES = ("ckpt_name", "vae_name", "lora_name", "lora_stack", "positive", "negative", "width", "height", "steps", "cfg", "sampler_name", "scheduler")
+
+    FUNCTION = "notify"
+    OUTPUT_NODE = True
+
+    CATEGORY = "EasyUse/Util"
+# {'ckpt_name': 'realisticVisionV51_v51VAE.safetensors', 'vae_name': 'Baked VAE', 'lora_name': 'None', 'lora_model_strength': 1.0, 'lora_clip_strength': 1.0, 'lora_stack': [], 'clip_skip': -2, 'a1111_prompt_style': False, 'positive': '', 'positive_token_normalization': 'none', 'positive_weight_interpretation': 'comfy', 'negative': '', 'negative_token_normalization': 'none', 'negative_weight_interpretation': 'comfy', 'resolution': '512 x 512', 'empty_latent_width': 512, 'empty_latent_height': 512, 'batch_size': 1, 'steps': 1, 'cfg': 1.0, 'sampler_name': 'euler', 'scheduler': 'normal', 'denoise': 1.0, 'add_noise': 'enabled', 'spent_time': 'Diffusion:1.022″, VAEDecode:0.703″ '}
+    def notify(self, pipe, names=None, unique_id=None, extra_pnginfo=None):
+        if unique_id and extra_pnginfo and "workflow" in extra_pnginfo:
+            workflow = extra_pnginfo["workflow"]
+            node = next((x for x in workflow["nodes"] if str(x["id"]) == unique_id), None)
+            if node:
+                ckpt_name = pipe['loader_settings']['ckpt_name'] if 'ckpt_name' in pipe['loader_settings'] else ''
+                vae_name = pipe['loader_settings']['vae_name'] if 'vae_name' in pipe['loader_settings'] else ''
+                lora_name = pipe['loader_settings']['lora_name'] if 'lora_name' in pipe['loader_settings'] else ''
+                # lora_stack = pipe['loader_settings']['lora_stack'] if 'lora_stack' in pipe['loader_settings'] else ''
+                lora_stack = ''
+                positive = pipe['loader_settings']['positive'] if 'positive' in pipe['loader_settings'] else ''
+                negative = pipe['loader_settings']['negative'] if 'negative' in pipe['loader_settings'] else ''
+                width = pipe['loader_settings']['empty_latent_width'] if 'empty_latent_width' in pipe['loader_settings'] else ''
+                height = pipe['loader_settings']['empty_latent_height'] if 'empty_latent_height' in pipe['loader_settings'] else ''
+                steps = pipe['loader_settings']['steps'] if 'steps' in pipe['loader_settings'] else ''
+                cfg = pipe['loader_settings']['cfg'] if 'cfg' in pipe['loader_settings'] else ''
+                sampler_name = pipe['loader_settings']['sampler_name'] if 'sampler_name' in pipe['loader_settings'] else ''
+                scheduler = pipe['loader_settings']['scheduler'] if 'scheduler' in pipe['loader_settings'] else ''
+
+                if ckpt_name:
+                    ckpt_name = os.path.basename(os.path.splitext(ckpt_name)[0])
+                if vae_name:
+                    vae_name = os.path.basename(os.path.splitext(vae_name)[0])
+                if lora_name:
+                    lora_name = os.path.basename(os.path.splitext(lora_name)[0])
+
+                names = "ckpt_name: " + ckpt_name + '\n' + "vae_name: " + vae_name + '\n' + "lora_name: " + lora_name + '\n' + "positive: " + positive + '\n' + "negative: " + negative + '\n' + "sampler_name: " + sampler_name + '\n' + "scheduler: " + scheduler
+                # names = "ckpt_name: " + ckpt_name + '\n' + "vae_name: " + vae_name + '\n' + "lora_name: " + lora_name + '\n' + "lora_stack: " + lora_stack + '\n' + "positive: " + positive + '\n' + "negative: " + negative + '\n' + "width: " + str(width) + '\n' + "height: " + str(height) + '\n' + "steps: " + str(steps) + '\n' + "cfg: " + str(cfg) + '\n' + "sampler_name: " + sampler_name + '\n' + "scheduler: " + scheduler
+                print(names)
+                node["widgets_values"] = names
+
+        return {"ui": {"text": [names]}, "result": (ckpt_name, vae_name, lora_name, lora_stack, positive, negative, width, height, steps, cfg, sampler_name, scheduler,)}
 
 class sliderControl:
     @classmethod
@@ -110,6 +163,7 @@ class setControlName:
 
 NODE_CLASS_MAPPINGS = {
     "easy showLoaderSettingsNames": showLoaderSettingsNames,
+    "easy showLoaderSettings": showLoaderSettings,
     "easy sliderControl": sliderControl,
     "easy ckptNames": setCkptName,
     "easy controlnetNames": setControlName,
@@ -117,6 +171,7 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "easy showLoaderSettingsNames": "Show Loader Settings Names",
+    "easy showLoaderSettings": "Show Loader Settings",
     "easy sliderControl": "Easy Slider Control",
     "easy ckptNames": "Ckpt Names",
     "easy controlnetNames": "ControlNet Names",
