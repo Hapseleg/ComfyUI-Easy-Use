@@ -485,8 +485,7 @@ class imageSaveSimple:
 
   def save(self, images, filename_prefix="ComfyUI", only_preview=False, prompt=None, extra_pnginfo=None):
     if only_preview:
-      PreviewImage().save_images(images, filename_prefix, prompt, extra_pnginfo)
-      return ()
+      return PreviewImage().save_images(images, filename_prefix, prompt, extra_pnginfo)
     else:
       return SaveImage().save_images(images, filename_prefix, prompt, extra_pnginfo)
 
@@ -1746,7 +1745,7 @@ class imageToBase64:
       pil_image = tensor2pil(image)
 
       buffered = BytesIO()
-      pil_image.save(buffered, format="JPEG")
+      pil_image.save(buffered, format="PNG")
       image_bytes = buffered.getvalue()
 
       base64_str = base64.b64encode(image_bytes).decode("utf-8")
