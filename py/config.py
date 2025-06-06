@@ -395,4 +395,4 @@ PROMPT_TEMPLATE = {
     "nsfw": ["nude", "breast", "small breast", "middle breast", "large breast", "nipples", "clothes lift", "pussy juice trail", "pussy juice puddle", "small testicles", "medium testicles", "large testicles", "disembodied penis", "cum on body", "cum inside", "cum outside", "fingering", "handjob", "fellatio", "licking penis", "paizuri",  "doggystyle", "cowgirl", "reversed cowgirl", "piledriver", "suspended congress", "full nelson",],
 }
 
-NEW_SCHEDULERS = ['align_your_steps', 'gits']
+NEW_SCHEDULERS = ['align_your_steps', 'gits', 'AYS_SD1', 'AYS_SDXL', 'AYS_SVD']

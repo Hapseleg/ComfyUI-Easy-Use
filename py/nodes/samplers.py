@@ -339,6 +339,18 @@ class samplerFull:
                 sigmas, = alignYourStepsScheduler().get_sigmas(model_type.upper(), steps, denoise)
                 _sampler = comfy.samplers.sampler_object(sampler_name)
                 samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent, noise_device=noise_device)
+            elif scheduler == 'AYS_SD1':
+                sigmas, = alignYourStepsScheduler().get_sigmas('SD1', steps, denoise)
+                _sampler = comfy.samplers.sampler_object(sampler_name)
+                samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent, noise_device=noise_device)
+            elif scheduler == 'AYS_SDXL':
+                sigmas, = alignYourStepsScheduler().get_sigmas('SDXL', steps, denoise)
+                _sampler = comfy.samplers.sampler_object(sampler_name)
+                samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent, noise_device=noise_device)
+            elif scheduler == 'AYS_SVD':
+                sigmas, = alignYourStepsScheduler().get_sigmas('SVD', steps, denoise)
+                _sampler = comfy.samplers.sampler_object(sampler_name)
+                samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent, noise_device=noise_device)
             elif scheduler == 'gits':
                 sigmas, = gitsScheduler().get_sigmas(coeff=1.2, steps=steps, denoise=denoise)
                 _sampler = comfy.samplers.sampler_object(sampler_name)
