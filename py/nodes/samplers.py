@@ -51,8 +51,8 @@ class samplerFull:
                   }
                 }
 
-    RETURN_TYPES = ("PIPE_LINE", "IMAGE", "MODEL", "CONDITIONING", "CONDITIONING", "LATENT", "VAE", "CLIP", "INT",)
-    RETURN_NAMES = ("pipe",  "image", "model", "positive", "negative", "latent", "vae", "clip", "seed",)
+    RETURN_TYPES = ("PIPE_LINE", "IMAGE", "MODEL", "CONDITIONING", "CONDITIONING", "LATENT", "VAE", "CLIP", "INT", "IMAGE",)
+    RETURN_NAMES = ("pipe",  "image", "model", "positive", "negative", "latent", "vae", "clip", "seed", "plot_image",)
     OUTPUT_NODE = True
     FUNCTION = "run"
     CATEGORY = "EasyUse/Sampler"
@@ -555,6 +555,7 @@ class samplerFull:
                 "seed": samp_seed,
                 "alpha": alpha,
 
+
                 "loader_settings": pipe["loader_settings"],
             }
 
@@ -563,7 +564,8 @@ class samplerFull:
             if image_output in ("Hide", "Hide&Save", "None"):
                 return {"ui": {}, "result": sampler.get_output(new_pipe,)}
 
-            return {"ui": {"images": results}, "result": sampler.get_output(new_pipe)}
+            # return {"ui": {"images": results}, "result": sampler.get_output(new_pipe)}
+            return results, sampler.get_output(new_pipe), images
 
         preview_latent = True
         if image_output in ("Hide", "Hide&Save", "None"):
@@ -595,7 +597,9 @@ class samplerFull:
                                                 force_full_denoise, disable_noise, samp_custom, noise_device)
         else:
             if xyPlot is not None:
-                return process_xyPlot(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive, samp_negative, steps, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent, xyPlot, force_full_denoise, disable_noise, samp_custom, noise_device)
+                ui_images, pipe_stuff_tuple, plot_image_tensor = process_xyPlot(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive, samp_negative, steps, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent, xyPlot, force_full_denoise, disable_noise, samp_custom, noise_device)
+                return {"ui": {"images": ui_images}, "result": pipe_stuff_tuple + (plot_image_tensor,)}
+                # return process_xyPlot(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive, samp_negative, steps, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent, xyPlot, force_full_denoise, disable_noise, samp_custom, noise_device)
             else:
                 return process_sample_state(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive, samp_negative, steps, start_step, last_step, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent, force_full_denoise, disable_noise, samp_custom, noise_device)
 
